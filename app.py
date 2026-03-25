@@ -772,7 +772,7 @@ with tabs[3]:
                 text=[[f"TN={tn:,}", f"FP={fp:,}"], [f"FN={fn:,}", f"TP={tp:,}"]],
                 texttemplate="%{text}",
                 textfont=dict(color="#fafafa"),
-                colorscale=[[0,"#18181b"],[0.5,f"{color}44"],[1,color]],
+                colorscale=[[0,"#18181b"],[0.5,"rgb(80,80,80)"],[1,color]],
                 showscale=False,
             ))
             fig_cm.update_layout(
