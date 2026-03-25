@@ -793,7 +793,15 @@ with tabs[3]:
     for j, mname in enumerate(["Random Forest", "Gradient Boosting"]):
         pipe = results["baselines"].pipelines[mname]
         clf  = pipe.named_steps["clf"]
-        importances = clf.feature_importances_
+        # Unwrap CalibratedClassifierCV if present
+        if hasattr(clf, "feature_importances_"):
+            importances = clf.feature_importances_
+        elif hasattr(clf, "estimator") and hasattr(clf.estimator, "feature_importances_"):
+            importances = clf.estimator.feature_importances_
+        elif hasattr(clf, "calibrated_classifiers_"):
+            importances = clf.calibrated_classifiers_[0].estimator.feature_importances_
+        else:
+            continue
         imp_df = pd.DataFrame({
             "Feature": feat_names[:len(importances)],
             "Importance": importances,
