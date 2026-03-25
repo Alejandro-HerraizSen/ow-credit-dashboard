@@ -1,0 +1,7 @@
+__pycache__/
+*.pptx
+*.mp4
+Quant_Challenge_data_amended (1).csv
+.claude/
+*.pyc
+.DS_Store
