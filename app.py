@@ -870,7 +870,8 @@ with tabs[3]:
             fig_vio.add_trace(go.Violin(
                 y=proba[mask], name=label,
                 box_visible=True, meanline_visible=True,
-                fillcolor=lcolor + "55", line_color=lcolor,
+                fillcolor=f"rgba({int(lcolor[1:3],16)},{int(lcolor[3:5],16)},{int(lcolor[5:7],16)},0.33)",
+                line_color=lcolor,
             ))
         fig_vio.update_layout(
             title=dict(text=mname, font_size=11),
