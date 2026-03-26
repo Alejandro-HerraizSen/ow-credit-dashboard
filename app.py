@@ -1073,3 +1073,193 @@ with tabs[4]:
                 st.info("No single-feature change produces a significant improvement.")
     else:
         st.info("Fill in the form above and click **▶ Assess Applicant**.")
+
+    # ── Batch CSV Scoring ─────────────────────────────────────────────────────
+    st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+    st.markdown("## Batch Scoring — Upload a New CSV")
+    st.markdown("""
+    <div class='ow-card-light' style='font-size:0.85rem;'>
+    Upload a CSV with the same feature columns as the training data. The model will score every row and return
+    credit scores, PDs, risk bands, and decisions.<br><br>
+    <strong style="color:#fafafa;">Required columns:</strong> <code>income</code>, <code>loan_amount</code>,
+    <code>term_length</code>, <code>install_to_inc</code>, <code>schufa</code>, <code>num_applic</code>,
+    <code>occup</code>, <code>marital</code><br>
+    <strong style="color:#fafafa;">Optional column:</strong> <code>target_var</code> (if present, model performance metrics are computed)
+    </div>""", unsafe_allow_html=True)
+
+    uploaded = st.file_uploader("Upload CSV", type=["csv"], key="batch_csv")
+    if uploaded is not None:
+        try:
+            df_up = pd.read_csv(uploaded, dtype=str)
+            st.success(f"Loaded **{len(df_up):,}** rows × {len(df_up.columns)} columns")
+
+            # ── Clean the uploaded data using the same pipeline ──
+            from credit_model import DataCleaner
+            cleaner = DataCleaner()
+            df_up_clean = cleaner.clean(df_up)
+
+            # Check required columns
+            missing_cols = [c for c in ALL_FEATURES if c not in df_up_clean.columns]
+            if missing_cols:
+                st.error(f"Missing required columns: **{', '.join(missing_cols)}**")
+            else:
+                df_up_model = df_up_clean.dropna(subset=[TARGET]).copy() if TARGET in df_up_clean.columns else df_up_clean.copy()
+
+                # ── Score with all models ──
+                scores  = sc.predict_score(df_up_model[ALL_FEATURES])
+                pds     = sc.predict_proba(df_up_model[ALL_FEATURES])
+
+                result_df = df_up_model[ALL_FEATURES].copy()
+                result_df["Credit Score"]  = scores.astype(int)
+                result_df["PD"]            = pds.round(4)
+                result_df["Risk Band"]     = pd.cut(scores, bins=[0, 500, 700, 1100],
+                                                     labels=["High Risk", "Medium Risk", "Low Risk"])
+                result_df["Decision"]      = pd.cut(scores, bins=[0, 500, 650, 1100],
+                                                     labels=["DECLINE", "REVIEW", "APPROVE"])
+
+                # ── Add all baseline model PDs ──
+                for mname, pipe in results["baselines"].pipelines.items():
+                    try:
+                        result_df[f"PD ({mname})"] = pipe.predict_proba(df_up_model[ALL_FEATURES])[:, 1].round(4)
+                    except Exception:
+                        pass
+
+                # ── KPI row ──
+                k1, k2, k3, k4, k5 = st.columns(5)
+                k1.metric("Rows Scored", f"{len(result_df):,}")
+                k2.metric("Avg Score", f"{scores.mean():.0f}")
+                k3.metric("Avg PD", f"{pds.mean():.1%}")
+                n_approve = int((scores >= 650).sum())
+                n_decline = int((scores < 500).sum())
+                k4.metric("Auto-Approve", f"{n_approve:,} ({n_approve/len(result_df):.0%})")
+                k5.metric("Decline", f"{n_decline:,} ({n_decline/len(result_df):.0%})")
+
+                st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+
+                col_batch_l, col_batch_r = st.columns(2)
+
+                with col_batch_l:
+                    # ── Score distribution ──
+                    st.markdown("### Score Distribution — Uploaded Data")
+                    fig_batch_hist = go.Figure()
+                    if TARGET in df_up_model.columns:
+                        y_up = df_up_model[TARGET].astype(int)
+                        for tv, label, color in [(0,"Non-default",OW["blue"]),(1,"Default",OW["red"])]:
+                            fig_batch_hist.add_trace(go.Histogram(
+                                x=scores[y_up==tv], name=label,
+                                marker_color=color, opacity=0.65, nbinsx=40,
+                            ))
+                        fig_batch_hist.update_layout(barmode="overlay")
+                    else:
+                        fig_batch_hist.add_trace(go.Histogram(
+                            x=scores, name="All applicants",
+                            marker_color=OW["blue"], opacity=0.75, nbinsx=40,
+                        ))
+                    fig_batch_hist.add_vline(x=650, line_dash="dot", line_color=OW["amber"],
+                                             annotation_text="Approve (650)",
+                                             annotation_font_color="#fbbf24")
+                    fig_batch_hist.add_vline(x=500, line_dash="dot", line_color=OW["red"],
+                                             annotation_text="Decline (500)",
+                                             annotation_font_color="#f87171")
+                    fig_batch_hist.update_layout(
+                        template=TMPL, height=320, margin=dict(t=10,b=20),
+                        xaxis_title="Credit Score", yaxis_title="Count",
+                        legend=dict(orientation="h", y=1.1),
+                    )
+                    st.plotly_chart(fig_batch_hist, use_container_width=True)
+
+                with col_batch_r:
+                    # ── Decision breakdown pie ──
+                    st.markdown("### Decision Breakdown")
+                    dec_vc = result_df["Decision"].value_counts().reset_index()
+                    dec_vc.columns = ["Decision", "Count"]
+                    fig_dec = px.pie(dec_vc, values="Count", names="Decision",
+                                     color="Decision",
+                                     color_discrete_map={"APPROVE":OW["green"],"REVIEW":OW["amber"],"DECLINE":OW["red"]},
+                                     template=TMPL, height=320)
+                    fig_dec.update_layout(margin=dict(t=10, b=10),
+                                           legend=dict(orientation="h", y=-0.1))
+                    st.plotly_chart(fig_dec, use_container_width=True)
+
+                # ── Performance metrics if target is present ──
+                if TARGET in df_up_model.columns:
+                    st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+                    st.markdown("### Model Performance on Uploaded Data")
+                    y_up = df_up_model[TARGET].astype(int)
+
+                    up_probas = {"WoE Scorecard": pds}
+                    for mname, pipe in results["baselines"].pipelines.items():
+                        try:
+                            up_probas[mname] = pipe.predict_proba(df_up_model[ALL_FEATURES])[:, 1]
+                        except Exception:
+                            pass
+
+                    from sklearn.metrics import roc_auc_score, brier_score_loss
+                    perf_rows = []
+                    for mname, proba in up_probas.items():
+                        try:
+                            auc_v = roc_auc_score(y_up, proba)
+                            brier_v = brier_score_loss(y_up, proba)
+                            gini_v = 2 * auc_v - 1
+                            ap_v = average_precision_score(y_up, proba)
+                            perf_rows.append({"Model": mname, "AUC": round(auc_v,4),
+                                              "Gini": round(gini_v,4), "Brier": round(brier_v,4),
+                                              "Avg Precision": round(ap_v,4)})
+                        except Exception:
+                            pass
+                    if perf_rows:
+                        perf_df = pd.DataFrame(perf_rows)
+                        styled_perf = (
+                            perf_df.style
+                            .highlight_max(subset=["AUC","Gini","Avg Precision"], color="rgba(74,222,128,0.15)")
+                            .highlight_min(subset=["Brier"], color="rgba(74,222,128,0.15)")
+                            .format({"AUC":"{:.4f}","Gini":"{:.4f}","Brier":"{:.4f}","Avg Precision":"{:.4f}"})
+                            .apply(lambda col: [
+                                "font-weight:800;color:#3b82f6;" if r == "WoE Scorecard" else ""
+                                for r in perf_df["Model"]
+                            ] if col.name == "Model" else [""]*len(col), axis=0)
+                        )
+                        st.dataframe(styled_perf, use_container_width=True, hide_index=True)
+                        st.caption("Performance metrics computed on uploaded data using models trained on the original dataset.")
+
+                    # ── ROC on uploaded data ──
+                    st.markdown("### ROC Curves — Uploaded Data")
+                    fig_roc_up = go.Figure()
+                    fig_roc_up.add_scatter(x=[0,1], y=[0,1], mode="lines", name="Random",
+                                           line=dict(dash="dash", color="#52525b", width=1))
+                    for mname, proba in up_probas.items():
+                        try:
+                            fpr, tpr, _ = compute_roc_curve_data(y_up, proba)
+                            auc_v = roc_auc_score(y_up, proba)
+                            fig_roc_up.add_scatter(
+                                x=fpr, y=tpr, mode="lines",
+                                name=f"{mname} (AUC={auc_v:.4f})",
+                                line=dict(color=MODEL_PALETTE.get(mname,"#71717a"),
+                                          width=3 if mname=="WoE Scorecard" else 1.5),
+                            )
+                        except Exception:
+                            pass
+                    fig_roc_up.update_layout(
+                        template=TMPL, xaxis_title="False Positive Rate",
+                        yaxis_title="True Positive Rate",
+                        legend=dict(orientation="h", y=-0.35, font_size=10),
+                        margin=dict(t=10,b=100), height=430,
+                    )
+                    st.plotly_chart(fig_roc_up, use_container_width=True)
+
+                # ── Downloadable results ──
+                st.markdown("<hr class='section-divider'>", unsafe_allow_html=True)
+                st.markdown("### Full Results Table")
+                st.dataframe(result_df, use_container_width=True, hide_index=True)
+
+                csv_out = result_df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    label="📥 Download Scored CSV",
+                    data=csv_out,
+                    file_name="scored_applications.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+
+        except Exception as e:
+            st.error(f"Error processing CSV: {e}")
